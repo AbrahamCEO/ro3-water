@@ -1,9 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, useAnimation, AnimatePresence } from 'framer-motion';
-import { io, Socket } from 'socket.io-client';
 import ChatMessage from './ChatMessage';
-
-const SOCKET_URL = 'http://localhost:4000';
 
 interface Message {
   type: 'user' | 'bot';
@@ -14,8 +11,7 @@ export default function ChatBot() {
   const [isOpen, setIsOpen] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
-  const [isConnected, setIsConnected] = useState(false);
-  const [socket, setSocket] = useState<Socket | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const controls = useAnimation();
 
@@ -41,44 +37,41 @@ export default function ChatBot() {
   };
 
   useEffect(() => {
-    // Initialize socket connection
-    const socketInstance = io(SOCKET_URL, {
-      withCredentials: true,
-      transports: ['websocket', 'polling']
-    });
-
-    socketInstance.on('connect', () => {
-      setIsConnected(true);
-      console.log('Connected to server');
-    });
-
-    socketInstance.on('disconnect', () => {
-      setIsConnected(false);
-      console.log('Disconnected from server');
-    });
-
-    socketInstance.on('bot response', (response: Message) => {
-      setMessages(prev => [...prev, response]);
-    });
-
-    setSocket(socketInstance);
-
-    return () => {
-      socketInstance.disconnect();
-    };
-  }, []);
-
-  useEffect(() => {
     scrollToBottom();
   }, [messages]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (input.trim() && socket) {
+    if (input.trim()) {
       const userMessage: Message = { type: 'user', content: input };
       setMessages(prev => [...prev, userMessage]);
-      socket.emit('chat message', input);
       setInput('');
+      setIsLoading(true);
+
+      try {
+        const response = await fetch('/.netlify/functions/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ message: input }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Network response was not ok');
+        }
+
+        const botResponse = await response.json();
+        setMessages(prev => [...prev, botResponse]);
+      } catch (error) {
+        console.error('Error:', error);
+        setMessages(prev => [...prev, {
+          type: 'bot',
+          content: 'Sorry, I encountered an error. Please try again.'
+        }]);
+      } finally {
+        setIsLoading(false);
+      }
     }
   };
 
@@ -151,11 +144,9 @@ export default function ChatBot() {
                       <button
                         key={index}
                         onClick={() => {
-                          if (socket) {
-                            const userMessage = { type: 'user', content: suggestion };
-                            setMessages(prev => [...prev, userMessage]);
-                            socket.emit('chat message', suggestion);
-                          }
+                          const userMessage = { type: 'user', content: suggestion };
+                          setMessages(prev => [...prev, userMessage]);
+                          handleSubmit({ preventDefault: () => {} } as React.FormEvent);
                         }}
                         className="bg-gray-100 hover:bg-gray-200 text-gray-700 px-3 py-1.5 rounded-full text-sm transition-colors"
                       >
@@ -168,6 +159,13 @@ export default function ChatBot() {
               {messages.map((msg, idx) => (
                 <ChatMessage key={idx} message={msg} />
               ))}
+              {isLoading && (
+                <div className="flex items-center space-x-2">
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce"></div>
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></div>
+                  <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></div>
+                </div>
+              )}
               <div ref={messagesEndRef} />
             </div>
 
@@ -181,11 +179,11 @@ export default function ChatBot() {
                     onChange={(e) => setInput(e.target.value)}
                     placeholder="Type your message..."
                     className="flex-1 px-4 py-2 border rounded-full focus:outline-none focus:ring-2 focus:ring-[#002B5B]"
-                    disabled={!isConnected}
+                    disabled={isLoading}
                   />
                   <button
                     type="submit"
-                    disabled={!isConnected || !input.trim()}
+                    disabled={isLoading || !input.trim()}
                     className="bg-[#002B5B] text-white px-4 py-2 rounded-full hover:bg-[#003B7B] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Send
@@ -201,15 +199,11 @@ export default function ChatBot() {
                     ].map((suggestion, index) => (
                       <button
                         key={index}
-                        type="button"
                         onClick={() => {
-                          if (socket) {
-                            const userMessage = { type: 'user', content: suggestion };
-                            setMessages(prev => [...prev, userMessage]);
-                            socket.emit('chat message', suggestion);
-                          }
+                          setInput(suggestion);
+                          handleSubmit({ preventDefault: () => {} } as React.FormEvent);
                         }}
-                        className="bg-gray-100 hover:bg-gray-200 text-gray-600 px-3 py-1 rounded-full text-xs transition-colors"
+                        className="text-xs text-gray-500 hover:text-gray-700"
                       >
                         {suggestion}
                       </button>
